@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import json
 import time
 import requests
 import unittest
@@ -13,73 +12,96 @@ URL_RESULTS = "https://api.contest.yandex.net/anytask/results"
 URL_PP = "/action/contest/{contestId}/list-problems?locale=ru"
 CONTEST_ID = 1303
 MAX_RETRIES = 10
-RESULT_TIMEOUT = 30
+SCORE_TIMEOUT = 30
+APPLICATION_ID = '2ae47301f8e64ae697c122edd7dde763'
+CLIENT_SECRET = 'a4d1256f2c3d4ddfa5fa83ec60862e59'
+RETRY_PAUSE = 1
+
+
+def code2oauth_token(code):
+    """
+    Return ntuple (status, message, oauth) for given code.
+    Oauth is long-lived token from temporary code to authenticate user for 
+    given application
+
+    code -- code 7-digit number you get from 
+        https://oauth.yandex.ru/authorize?response_type=code&client_id=2ae47301f8e64ae697c122edd7dde763
+    """
+    oauth = None
+    r = requests.post(
+        URL_TOKEN,
+        data={
+            'grant_type': 'authorization_code',
+            'client_id': APPLICATION_ID,
+            'client_secret': CLIENT_SECRET,
+            'code': code
+        })
+
+    if not r.ok:
+        message = "{} ({})".format(
+            r.json()['error'],
+            r.json()['error_description'])
+        logging.error(message)
+    else:
+        oauth = r.json()['access_token']
+        message = "Success"
+        logging.debug("OAuth token: {}".format(oauth))
+    return r.ok, message, oauth
 
 
 class YaContestSubmitter(object):
-    def __init__(self, code=None, oauth_token=None, contest_id=None):
+    def __init__(self, contest_id, code=None, oauth_token=None):
+        """
+        creates Yandex Contest wrapper for submitting solutions & getting scores
+
+        Arguments:
+        contest_id -- ID of contest you want to submit
+        code -- temporary code that would be converted to oauth_token, used only oauth_token is None
+        oauth_token -- oauth token
+
+        if constructor fails to convert code to oauth token or no oauth token is given, it raises Exception
+        """
         self.oauth = oauth_token
         self.contest_id = contest_id
         if oauth_token is None and code is not None:
-            status, message, oauth = self.code2oauth_token(code)
+            status, message, oauth = code2oauth_token(code)
             if status:
                 self.oauth = oauth
-        self.last_submit = None
+        if self.oauth is None:
+            raise Exception("Cannot obtain oauth token")
 
     def _list_contest_problems(self, contest_id=None):
         assert self.contest_id is not None or contest_id is not None
         if contest_id is None:
             contest_id = self.contest_id
-        result = requests.get(
-            "{}?contestId={}&locale=ru".format(URL_PROBLEMS, contest_id))
-        self._check_request_(result, "Get list of problems error")
-        return json.loads(result.text)
+        r = requests.get(
+            URL_PROBLEMS,
+            params={'contestId': contest_id,
+                    'locale': 'ru'})
+        self._check_request(r, "Get list of problems error")
+        return r.json()
 
     def _get_first_contest_problem(self):
         r = self._list_contest_problems()
         return r['result']['problems'][0]
 
-    def code2oauth_token(self, code):
-        '''
-        code - code 7-digit number you get from 
-            https://oauth.yandex.ru/authorize?response_type=code&client_id=2ae47301f8e64ae697c122edd7dde763
-        '''
-        if self.oauth is not None:
-            message = "you already have access token"
-            return True, message, self.oauth
-        result = requests.post(
-            URL_TOKEN,
-            data={
-                'grant_type': 'authorization_code',
-                'client_id': '2ae47301f8e64ae697c122edd7dde763',
-                'client_secret': 'a4d1256f2c3d4ddfa5fa83ec60862e59',
-                'code': code
-            })
-        if not result.ok:
-            message = "{} ({})".format(
-                json.loads(result.text)['error'],
-                json.loads(result.text)['error_description'])
-            logging.error(message)
-        else:
-            self.oauth = json.loads(result.text)['access_token']
-            message = "Success"
-            logging.info("OAuth token: {}".format(self.oauth))
-        return result.ok, message, self.oauth
-
-    def _headers_(self):
+    def _headers(self):
         return {'Authorization': 'OAuth {}'.format(self.oauth)}
 
-    def _check_request_(self, req, error_message):
-        assert req.ok, "{}: {} ({})".format(
-            error_message, 
-            json.loads(req.text)['error']['message'],
-            req.text)
+    def _check_request(self, req, error_message):
+        if not req.ok:
+            raise Exception("{}: {} ({})".format(
+                error_message, 
+                req.json()['error']['message'],
+                req.text))
 
-    def submit(self, filename, contest_id=None):
+    def submit(self, filename):
+        """
+        Submits file to Ya.Contest and returns submission Id that could be used for getting submission score
+
+        filename -- submission file
+        """
         assert self.oauth is not None, "Get oauth token first"
-        assert self.contest_id is not None or contest_id is not None, "Please specify contest_id"
-        if contest_id is not None:
-            self.contest_id = contest_id
         files = {'file': open(filename, 'rb')}
         problem_id = self._get_first_contest_problem()['id']
         result = None
@@ -89,58 +111,75 @@ class YaContestSubmitter(object):
                                     'contestId': self.contest_id,
                                     'problemId': problem_id},
                                 files=files,
-                                headers=self._headers_())
-            req_json = json.loads(req.text)
+                                headers=self._headers())
+            req_json = req.json()
             if req.ok:
                 result = req_json['result']['value']
                 break
-            if not req.ok and req_json['error']['message'].startswith("Can't save or update entity"):
+            elif req_json['error']['message'].startswith("Can't save or update entity"):
                 logging.warn("{}. Retrying.".format(req_json['error']['message']))
-                time.sleep(1)
+                time.sleep(RETRY_PAUSE)
                 continue
-            self._check_request_(req, "Submission error. N_tries:{}".format(n_try))
+            self._check_request(req, "Submission error. N_tries:{}".format(n_try))
             break
         if result is None:
-            assert False, "Error sending submission"
+            raise Exception("Error sending submission")
         self.result_id = result
         return result
 
-    def get_result_async(self, run_id=None):
+    def get_score_async(self, run_id=None):
         assert self.oauth is not None, "Get oauth token first"
         assert run_id is not None or self.result_id is not None, "Result_id is not defined"
         if run_id is None:
             run_id = self.result_id
-        url = '{:s}?runId={:d}&contestId={:d}'.format(URL_RESULTS, run_id, self.contest_id)
-        req = requests.get(url, headers=self._headers_())
-        self._check_request_(req, "Reading result error (RUN:{}, URL:{})".format(run_id, url))
-        return json.loads(req.text)
+        req = requests.get(
+            URL_RESULTS,
+            params={
+                'runId': run_id,
+                'contestId': self.contest_id
+            },
+            headers=self._headers())
+        self._check_request(req, "Reading result error (RUN:{})".format(run_id))
+        return req.json()
 
-    def get_result(self, run_id=None):
+    def get_score(self, run_id=None):
+        """
+        Returns previous submission score and message from Ya.Contest 
+
+        run_id -- number returned by previous 'submit'
+        It waits SCORE_TIMEOUT seconds before giving up.
+        """
         score = None
         message = None
-        for n_try in xrange(RESULT_TIMEOUT):
-            r = self.get_result_async(run_id)
+        for n_try in xrange(SCORE_TIMEOUT):
+            r = self.get_score_async(run_id)
             if len(r['result']['tests']) > 0 and r['result']['tests'][0]['verdict'] == 'ok':
                 assert 'score' in r['result']['submission'], "invalid contest response: {}".format(r)
                 score = r['result']['submission']['score']['doubleScore']
                 message = r['result']['tests'][0]['message']
                 break
             logging.info("Submission status: {}".format(r['result']['submission']['status']))
-            time.sleep(1)
+            time.sleep(RETRY_PAUSE)
         return score, message
 
 
 class TestStringMethods(unittest.TestCase):
 
     def setUp(self):
-        # go to URL:
-        # https://oauth.yandex.ru/authorize?response_type=code&client_id=2ae47301f8e64ae697c122edd7dde763
-        # 
         contest = YaContestSubmitter(
             code='6315154',
             oauth_token='21a1929c450641769be5c5bc49a55d54',
             contest_id=CONTEST_ID)
         self.contest = contest
+
+    def test_no_oauth(self):
+        with self.assertRaises(Exception):
+            c = YaContestSubmitter(CONTEST_ID)
+            self.assertEquals(c.contest_id, CONTEST_ID)
+
+    def test_code2oauth(self):
+        status, message, oauth = code2oauth_token('6315154')
+        self.assertFalse(status)
 
     def test_list_problems(self):
         r = self.contest._list_contest_problems()
@@ -161,7 +200,7 @@ class TestStringMethods(unittest.TestCase):
             self.assertGreater(r, 0)
 
         time.sleep(1)
-        score, message = self.contest.get_result()
+        score, message = self.contest.get_score()
         logging.info("score: {}, message: {}".format(score, message))
 
 
