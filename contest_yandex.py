@@ -16,7 +16,7 @@ MAX_RETRIES = 10
 RESULT_TIMEOUT = 30
 
 
-class YaContestcontest(object):
+class YaContestSubmitter(object):
     def __init__(self, code=None, oauth_token=None, contest_id=None):
         self.oauth = oauth_token
         self.contest_id = contest_id
@@ -130,7 +130,7 @@ class TestStringMethods(unittest.TestCase):
         # go to URL:
         # https://oauth.yandex.ru/authorize?response_type=code&client_id=2ae47301f8e64ae697c122edd7dde763
         # 
-        contest = YaContestcontest(
+        contest = YaContestSubmitter(
             code='6315154',
             oauth_token='21a1929c450641769be5c5bc49a55d54',
             contest_id=CONTEST_ID)
