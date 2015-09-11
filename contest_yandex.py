@@ -20,7 +20,6 @@ class YaContestSubmitter(object):
     def __init__(self, code=None, oauth_token=None, contest_id=None):
         self.oauth = oauth_token
         self.contest_id = contest_id
-        assert contest_id is not None, "Please specify contest_id"
         if oauth_token is None and code is not None:
             status, message, oauth = self.code2oauth_token(code)
             if status:
@@ -76,8 +75,11 @@ class YaContestSubmitter(object):
             json.loads(req.text)['error']['message'],
             req.text)
 
-    def submit(self, filename):
+    def submit(self, filename, contest_id=None):
         assert self.oauth is not None, "Get oauth token first"
+        assert self.contest_id is not None or contest_id is not None, "Please specify contest_id"
+        if contest_id is not None:
+            self.contest_id = contest_id
         files = {'file': open(filename, 'rb')}
         problem_id = self._get_first_contest_problem()['id']
         result = None
