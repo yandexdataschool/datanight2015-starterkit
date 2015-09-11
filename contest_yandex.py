@@ -20,6 +20,7 @@ class YaContestSubmitter(object):
     def __init__(self, code=None, oauth_token=None, contest_id=None):
         self.oauth = oauth_token
         self.contest_id = contest_id
+        assert contest_id is not None, "Please specify contest_id"
         if oauth_token is None and code is not None:
             status, message, oauth = self.code2oauth_token(code)
             if status:
