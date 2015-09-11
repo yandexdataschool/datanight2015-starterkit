@@ -117,6 +117,7 @@ class YaContestSubmitter(object):
 
     def get_result(self, run_id=None):
         score = None
+        message = None
         for n_try in xrange(RESULT_TIMEOUT):
             r = self.get_result_async(run_id)
             if len(r['result']['tests']) > 0 and r['result']['tests'][0]['verdict'] == 'ok':
